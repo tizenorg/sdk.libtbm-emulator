@@ -1,6 +1,6 @@
 Name:           libtbm-emulator
 Version:        0.1.2
-Release:        1
+Release:        2
 License:        MIT
 Summary:        Tizen Buffer Manager - emulator backend
 Group:          System/Libraries
@@ -28,6 +28,8 @@ make %{?_smp_mflags}
 
 %install
 rm -rf %{buildroot}
+mkdir -p %{buildroot}/usr/share/license
+cp -af COPYING %{buildroot}/usr/share/license/%{name}
 
 %make_install
 
@@ -41,3 +43,4 @@ ln -s libtbm_emulator.so %{_libdir}/bufmgr/libtbm_default.so
 
 %files
 %{_libdir}/bufmgr/libtbm_*.so*
+/usr/share/license/%{name}
