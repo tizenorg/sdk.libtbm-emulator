@@ -1,6 +1,6 @@
 Name:           libtbm-emulator
-Version:        0.1.2
-Release:        2
+Version:        0.1.3
+Release:        1
 License:        MIT
 Summary:        Tizen Buffer Manager - emulator backend
 Group:          System/Libraries

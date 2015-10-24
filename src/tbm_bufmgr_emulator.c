@@ -45,6 +45,7 @@
 
 static uint32_t tbm_bufmgr_emulator_color_format_list[] =
 {
+    TBM_FORMAT_RGB888,
     TBM_FORMAT_ARGB8888,
     TBM_FORMAT_XRGB8888,
     TBM_FORMAT_NV21,
@@ -173,6 +174,31 @@ static void *tbm_bufmgr_emulator_bo_import(tbm_bo bo, unsigned int key)
     return sfc;
 }
 
+static void *tbm_bufmgr_emulator_bo_import_fd(tbm_bo bo, tbm_fd key)
+{
+    struct vigs_drm_device *drm_dev;
+    struct vigs_drm_surface *sfc;
+    int ret;
+
+    TBM_EMULATOR_LOG_DEBUG("bo = %p, key = %d", bo, key);
+
+    drm_dev = (struct vigs_drm_device *)tbm_backend_get_bufmgr_priv(bo);
+
+    ret = vigs_drm_prime_import_fd(drm_dev, key, &sfc);
+
+    if (ret != 0) {
+        TBM_EMULATOR_LOG_ERROR("vigs_drm_prime_import_fd failed for key %d: %s",
+                               key,
+                               strerror(-ret));
+        return NULL;
+    }
+
+    TBM_EMULATOR_LOG_DEBUG("handle = %u", sfc->gem.handle);
+
+    return sfc;
+}
+
+
 static unsigned int tbm_bufmgr_emulator_bo_export(tbm_bo bo)
 {
     struct vigs_drm_surface *sfc;
@@ -191,6 +217,28 @@ static unsigned int tbm_bufmgr_emulator_bo_export(tbm_bo bo)
     }
 
     return sfc->gem.name;
+}
+
+tbm_fd tbm_bufmgr_emulator_bo_export_fd(tbm_bo bo)
+{
+    struct vigs_drm_device *drm_dev;
+    struct vigs_drm_surface *sfc;
+    int ret, fd = 0;
+
+    TBM_EMULATOR_LOG_DEBUG("bo = %p", bo);
+
+    drm_dev = (struct vigs_drm_device *)tbm_backend_get_bufmgr_priv(bo);
+    sfc = (struct vigs_drm_surface *)tbm_backend_get_bo_priv(bo);;
+
+    ret = vigs_drm_prime_export_fd(drm_dev, sfc, &fd);
+
+    if (ret != 0) {
+        TBM_EMULATOR_LOG_ERROR("vigs_drm_prime_export_fd failed: %s",
+                               strerror(-ret));
+        return 0;
+    }
+
+    return fd;
 }
 
 static tbm_bo_handle tbm_bufmgr_emulator_bo_get_handle(tbm_bo bo, int device)
@@ -284,28 +332,38 @@ static int tbm_bufmgr_emulator_bo_get_global_key(tbm_bo bo)
     return sfc->gem.name;
 }
 
-static int tbm_bufmgr_emulator_surface_get_plane_data(tbm_surface_h surface, int width, int height, tbm_format format, int plane_idx, uint32_t *size, uint32_t *offset, uint32_t *pitch)
+static int tbm_bufmgr_emulator_surface_get_plane_data(tbm_surface_h surface, int width, int height, tbm_format format, int plane_idx, uint32_t *size, uint32_t *offset, uint32_t *pitch, int *bo_idx)
 {
     *size = 0;
     *offset = 0;
     *pitch = 0;
+    *bo_idx = 0;
 
     switch(format) {
+    case TBM_FORMAT_RGB888:
+        *size = width * height * 3;
+        *offset = 0;
+        *pitch = width * 3;
+        *bo_idx = 0;
+        return 1;
     case TBM_FORMAT_XRGB8888:
     case TBM_FORMAT_ARGB8888:
         *size = width * height * 4;
         *offset = 0;
         *pitch = width * 4;
+        *bo_idx = 0;
         return 1;
     case TBM_FORMAT_NV21:
         if (plane_idx == 0) {
             *size = width * height;
             *offset = 0;
             *pitch = width;
+            *bo_idx = 0;
         } else if (plane_idx == 1) {
             *size = width * (height >> 1);
             *offset = width * height;
             *pitch = width;
+            *bo_idx = 0;
         } else {
             return 0;
         }
@@ -315,10 +373,12 @@ static int tbm_bufmgr_emulator_surface_get_plane_data(tbm_surface_h surface, int
             *size = width * height;
             *offset = 0;
             *pitch = width;
+            *bo_idx = 0;
         } else if (plane_idx == 1) {
             *size = width * height;
             *offset = width * height;
             *pitch = width;
+            *bo_idx = 0;
         } else {
             return 0;
         }
@@ -328,14 +388,17 @@ static int tbm_bufmgr_emulator_surface_get_plane_data(tbm_surface_h surface, int
             *size = width * height;
             *offset = 0;
             *pitch = width;
+            *bo_idx = 0;
         } else if (plane_idx == 1) {
             *size = (width * height) >> 2;
             *offset = width * height;
             *pitch = width >> 1 ;
+            *bo_idx = 0;
         } else if (plane_idx == 2) {
             *size = (width * height) >> 2;
             *offset = (width * height) + (width  * height >> 2);
             *pitch = width >> 1;
+            *bo_idx = 0;
         } else {
             return 0;
         }
@@ -350,6 +413,9 @@ static int tbm_bufmgr_emulator_surface_get_size(tbm_surface_h surface, int width
     int bpp;
 
     switch(format) {
+    case TBM_FORMAT_RGB888:
+        bpp = 24;
+        break;
     case TBM_FORMAT_XRGB8888:
     case TBM_FORMAT_ARGB8888:
         bpp = 32;
@@ -368,6 +434,28 @@ static int tbm_bufmgr_emulator_surface_get_size(tbm_surface_h surface, int width
         return 0;
     }
     return (width * height * bpp) >> 3;
+}
+
+static int tbm_bufmgr_emulator_surface_get_num_bos (tbm_format format)
+{
+    int num = 0;
+
+    switch(format) {
+    case TBM_FORMAT_RGB888:
+    case TBM_FORMAT_XRGB8888:
+    case TBM_FORMAT_ARGB8888:
+    /* NV21 : Y/CrCb 4:2:0 */
+    /* YUV420 : YUV 4:2:0 */
+    case TBM_FORMAT_NV21:
+    case TBM_FORMAT_YUV420:
+    /* NV61 : Y/CrCb 4:2:2 */
+    case TBM_FORMAT_NV61:
+        num = 1;
+        break;
+    default:
+        return 0;
+    }
+    return num;
 }
 
 static int tbm_bufmgr_emulator_surface_supported_format(uint32_t **formats, uint32_t *num)
@@ -435,7 +523,9 @@ int tbm_bufmgr_emulator_init(tbm_bufmgr bufmgr, int fd)
     backend->bo_alloc = tbm_bufmgr_emulator_bo_alloc;
     backend->bo_free = tbm_bufmgr_emulator_bo_free;
     backend->bo_import = tbm_bufmgr_emulator_bo_import;
+    backend->bo_import_fd = tbm_bufmgr_emulator_bo_import_fd;
     backend->bo_export = tbm_bufmgr_emulator_bo_export;
+    backend->bo_export_fd = tbm_bufmgr_emulator_bo_export_fd;
     backend->bo_get_handle = tbm_bufmgr_emulator_bo_get_handle;
     backend->bo_map = tbm_bufmgr_emulator_bo_map;
     backend->bo_unmap = tbm_bufmgr_emulator_bo_unmap;
@@ -446,6 +536,7 @@ int tbm_bufmgr_emulator_init(tbm_bufmgr bufmgr, int fd)
     backend->surface_get_plane_data = tbm_bufmgr_emulator_surface_get_plane_data;
     backend->surface_get_size = tbm_bufmgr_emulator_surface_get_size;
     backend->surface_supported_format = tbm_bufmgr_emulator_surface_supported_format;
+    backend->surface_get_num_bos = tbm_bufmgr_emulator_surface_get_num_bos;
 
     if (!tbm_backend_init(bufmgr, backend)) {
         TBM_EMULATOR_LOG_ERROR("tbm_backend_init failed");
